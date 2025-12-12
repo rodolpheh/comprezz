@@ -1548,15 +1548,18 @@ pub fn Deflate(comptime container: Container) type {
                 }
                 // Read up to buffer size, limiting to avoid buffer overflow
                 const read_size = @min(buf.len, 4096);
-                const slice = reader.take(read_size) catch |err| switch (err) {
-                    error.EndOfStream => break,
-                    error.ReadFailed => return error.ReadFailed,
-                };
-                @memcpy(buf[0..slice.len], slice);
-                self.hasher.update(buf[0..slice.len]);
-                self.win.written(slice.len);
+                var slice_len: usize = 0;
+                for (0..read_size) |i| {
+                    buf[i] = reader.takeByte() catch |err| switch (err) {
+                        error.EndOfStream => break,
+                        error.ReadFailed => return error.ReadFailed,
+                    };
+                    slice_len += 1;
+                }
+                self.hasher.update(buf[0..slice_len]);
+                self.win.written(slice_len);
                 try self.tokenize(.none);
-                if (slice.len < read_size) break;
+                if (slice_len < read_size) break;
             }
         }
 
@@ -1727,4 +1730,42 @@ test "compression with different sizes" {
     try expect(small_compressed[1] == 0x8b);
     try expect(large_compressed[0] == 0x1f);
     try expect(large_compressed[1] == 0x8b);
+}
+
+test "end-to-end" {
+    const data = "The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog.";
+
+    var reader = std.Io.Reader.fixed(data);
+    var writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+
+    try compress(&reader, &writer.writer, .{});
+
+    const compressed = try writer.toOwnedSlice();
+    defer std.testing.allocator.free(compressed);
+
+    var compressed_reader = std.Io.Reader.fixed(compressed);
+    var decompressed_writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+
+    var buffer: [std.compress.flate.max_window_len]u8 = undefined;
+
+    var decompress = std.compress.flate.Decompress.init(
+        &compressed_reader,
+        .gzip,
+        &buffer,
+    );
+    _ = try decompress.reader.streamRemaining(&decompressed_writer.writer);
+
+    const decompressed = try decompressed_writer.toOwnedSlice();
+    defer std.testing.allocator.free(decompressed);
+
+    std.debug.print(
+        "Data length: {d}, compressed length: {d}, ratio: {d}:1",
+        .{
+            data.len,
+            compressed.len,
+            data.len / @as(f32, @floatFromInt(compressed.len)),
+        },
+    );
+
+    try std.testing.expectEqualSlices(u8, data, decompressed);
 }
