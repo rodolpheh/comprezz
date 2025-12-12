@@ -4,7 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig") });
+    const lib_mod = b.addModule("comprezz", .{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+    });
 
     const exe = b.addExecutable(.{
         .name = "comprezz",
@@ -28,11 +31,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     const lib_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/lib.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = lib_mod,
     });
 
     const run_lib_tests = b.addRunArtifact(lib_tests);
