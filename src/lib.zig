@@ -1548,24 +1548,11 @@ pub fn Deflate(comptime container: Container) type {
                 }
                 // Read up to buffer size, limiting to avoid buffer overflow
                 const read_size = @min(buf.len, 4096);
-                var read_attempt_size = read_size;
 
                 var writer = std.Io.Writer.fixed(buf);
-
-                var slice_len: usize = 0;
-                while (slice_len < read_size and read_attempt_size != 0) {
-                    const slice = reader.peek(read_attempt_size) catch |err| switch (err) {
-                        error.EndOfStream => {
-                            read_attempt_size >>= 1;
-                            continue;
-                        },
-                        error.ReadFailed => return error.ReadFailed,
-                    };
-                    reader.toss(read_attempt_size);
-                    slice_len += try writer.write(slice);
-
-                    read_attempt_size >>= 1;
-                }
+                const slice_len = reader.stream(&writer, .limited(read_size)) catch {
+                    break;
+                };
 
                 self.hasher.update(buf[0..slice_len]);
                 self.win.written(slice_len);
