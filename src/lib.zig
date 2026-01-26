@@ -882,7 +882,19 @@ pub const Container = enum {
     pub fn Hasher(comptime wrap: Container) type {
         const HasherType = switch (wrap) {
             .gzip => std.hash.Crc32,
-            .zlib => std.hash.Adler32,
+            .zlib => struct {
+                const Self = @This();
+                adler: u32 = 1,
+                pub fn init() Self {
+                    return .{};
+                }
+                pub fn update(self: *Self, input: []const u8) void {
+                    self.adler = std.hash.Adler32.permute(self.adler, input);
+                }
+                pub fn final(self: Self) u32 {
+                    return self.adler;
+                }
+            },
             .raw => struct {
                 pub fn init() @This() {
                     return .{};
@@ -1632,6 +1644,28 @@ test "basic compression" {
     try expect(compressed[1] == 0x8b);
 }
 
+test "basic zlib" {
+    var compressed_buffer: [1024]u8 = undefined;
+    var fixed_writer = std.Io.Writer.fixed(&compressed_buffer);
+
+    const data = "Hello, World!";
+    var input_buffer: [1024]u8 = undefined;
+    @memcpy(input_buffer[0..data.len], data);
+    var input_reader = std.Io.Reader.fixed(input_buffer[0..data.len]);
+
+    try deflateCompress(.zlib, &input_reader, &fixed_writer, .{});
+
+    // Find the end of compressed data by checking for non-zero bytes
+    var written: usize = 0;
+    for (compressed_buffer, 0..) |byte, i| {
+        if (byte != 0) written = i + 1;
+    }
+    const compressed = compressed_buffer[0..written];
+    try expect(compressed.len > 0);
+    try expect(compressed[0] == 0x78);
+    try expect(compressed[1] == 0b10_0_11100);
+}
+
 test "token size" {
     try expect(@sizeOf(Token) == 4);
 }
@@ -1766,6 +1800,35 @@ test "end-to-end" {
             data.len / @as(f32, @floatFromInt(compressed.len)),
         },
     );
+
+    try std.testing.expectEqualSlices(u8, data, decompressed);
+}
+
+test "end-to-end zlib" {
+    const data = "The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog.";
+
+    var reader = std.Io.Reader.fixed(data);
+    var writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+
+    try deflateCompress(.zlib, &reader, &writer.writer, .{});
+
+    const compressed = try writer.toOwnedSlice();
+    defer std.testing.allocator.free(compressed);
+
+    var compressed_reader = std.Io.Reader.fixed(compressed);
+    var decompressed_writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+
+    var buffer: [std.compress.flate.max_window_len]u8 = undefined;
+
+    var decompress = std.compress.flate.Decompress.init(
+        &compressed_reader,
+        .zlib,
+        &buffer,
+    );
+    _ = try decompress.reader.streamRemaining(&decompressed_writer.writer);
+
+    const decompressed = try decompressed_writer.toOwnedSlice();
+    defer std.testing.allocator.free(decompressed);
 
     try std.testing.expectEqualSlices(u8, data, decompressed);
 }
