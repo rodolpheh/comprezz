@@ -882,28 +882,15 @@ pub const Container = enum {
     pub fn Hasher(comptime wrap: Container) type {
         const HasherType = switch (wrap) {
             .gzip => std.hash.Crc32,
-            .zlib => struct {
-                const Self = @This();
-                adler: u32 = 1,
-                pub fn init() Self {
-                    return .{};
-                }
-                pub fn update(self: *Self, input: []const u8) void {
-                    self.adler = std.hash.Adler32.permute(self.adler, input);
-                }
-                pub fn final(self: Self) u32 {
-                    return self.adler;
-                }
-            },
-            .raw => struct {
-                pub fn init() @This() {
-                    return .{};
-                }
-            },
+            .zlib => std.hash.Adler32,
+            .raw => struct {},
         };
 
         return struct {
-            hasher: HasherType = HasherType.init(),
+            hasher: HasherType = switch (wrap) {
+                .gzip => HasherType.init(),
+                else => .{},
+            },
             bytes: usize = 0,
 
             const Self = @This();
@@ -921,7 +908,8 @@ pub const Container = enum {
             pub fn chksum(self: *Self) u32 {
                 switch (wrap) {
                     .raw => return 0,
-                    else => return self.hasher.final(),
+                    .zlib => return self.hasher.adler,
+                    .gzip => return self.hasher.final(),
                 }
             }
 
